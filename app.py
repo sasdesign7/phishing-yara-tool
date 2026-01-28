@@ -76,8 +76,8 @@ data = data.dropna(subset=["label"])
 
 data["label"] = data["label"].astype(int)
 
-    X = pd.DataFrame([url_features(u) for u in data["url"].astype(str)])
-    y = data["label"]
+ X = pd.DataFrame([url_features(u) for u in data["url"].astype(str)])
+y = data["label"]
 
     # ---------------------------
     # TRAIN MODEL
@@ -180,4 +180,5 @@ if tool == "🛡️ YARA Rule Recommendation Tool":
                     f"(Score: {row['score']:.2f})"
                 ):
                     st.code(row["rule_text"], language="yara")
+
 

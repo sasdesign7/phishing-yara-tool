@@ -49,16 +49,32 @@ if tool == "🚨 Phishing URL Detector":
             "special_chars": len(re.findall(r"[^a-zA-Z0-9]", u))
         }
 
-    # ---------------------------
-    # LOAD DATASET
-    # ---------------------------
-    data = pd.read_csv("processed_urls.csv")
-    data.columns = data.columns.str.lower()
+# ---------------------------
+# LOAD DATASET
+# ---------------------------
+data = pd.read_csv("processed_urls.csv")
+data.columns = data.columns.str.lower().str.strip()
 
-    data.rename(columns={"url": "url", "label": "label"}, inplace=True)
-    data["label"] = data["label"].replace(
-        {"phishing": 1, "legitimate": 0, -1: 1}
-    ).astype(int)
+# Ensure required columns exist
+data = data.rename(columns={"url": "url", "label": "label"})
+
+# Normalize label column safely
+data["label"] = data["label"].astype(str).str.lower().str.strip()
+
+data["label"] = data["label"].map({
+    "phishing": 1,
+    "malicious": 1,
+    "-1": 1,
+    "1": 1,
+    "legitimate": 0,
+    "benign": 0,
+    "0": 0
+})
+
+# Drop invalid or missing labels
+data = data.dropna(subset=["label"])
+
+data["label"] = data["label"].astype(int)
 
     X = pd.DataFrame([url_features(u) for u in data["url"].astype(str)])
     y = data["label"]
@@ -164,3 +180,4 @@ if tool == "🛡️ YARA Rule Recommendation Tool":
                     f"(Score: {row['score']:.2f})"
                 ):
                     st.code(row["rule_text"], language="yara")
+

@@ -9,7 +9,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # --------------------------------------------------
-# APP SETTINGS
+# PAGE CONFIG
 # --------------------------------------------------
 st.set_page_config(
     page_title="Cyber Defense Utilities",
@@ -30,78 +30,90 @@ module = st.sidebar.selectbox(
 if module == "Phishing Link Analyzer":
 
     st.header("🚨 Phishing Link Analyzer")
-    st.caption("Detects suspicious URLs using machine learning.")
+    st.write("Machine learning based detection using URL structure.")
 
     # ---------------------------
-    # URL FEATURE EXTRACTION
+    # FEATURE EXTRACTION
     # ---------------------------
-    def extract_url_metrics(link: str) -> dict:
-        parts = urlsplit(link)
-
+    def extract_url_metrics(url: str) -> dict:
+        parts = urlsplit(url)
         return {
-            "length_total": len(link),
-            "num_dots": link.count("."),
-            "num_slashes": link.count("/"),
-            "contains_ip": int(bool(re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", link))),
+            "url_length": len(url),
+            "dot_count": url.count("."),
+            "slash_count": url.count("/"),
+            "contains_ip": int(bool(re.search(r"\b\d{1,3}(\.\d{1,3}){3}\b", url))),
             "uses_https": int(parts.scheme == "https"),
-            "has_at_symbol": int("@" in link),
-            "path_segments": len([p for p in parts.path.split("/") if p]),
-            "query_size": len(parts.query),
-            "non_alnum_chars": sum(not c.isalnum() for c in link),
+            "has_at_symbol": int("@" in url),
+            "path_depth": len([p for p in parts.path.split("/") if p]),
+            "query_length": len(parts.query),
+            "special_char_count": sum(not c.isalnum() for c in url),
         }
 
     # ---------------------------
-    # LOAD & PREP DATA
+    # LOAD & CLEAN DATA
     # ---------------------------
     df = pd.read_csv("processed_urls.csv")
     df.columns = df.columns.str.lower()
 
-    df["label"] = df["label"].replace(
-        {"phishing": 1, "legitimate": 0, -1: 1}
-    ).astype(int)
+    # FIX: safely map labels
+    df["label"] = df["label"].replace({
+        "phishing": 1,
+        "legitimate": 0,
+        -1: 1,
+        1.0: 1,
+        0.0: 0
+    })
 
-    feature_df = pd.DataFrame(
+    # Drop rows with unknown labels
+    df = df.dropna(subset=["label"])
+    df["label"] = df["label"].astype(int)
+
+    # ---------------------------
+    # FEATURE MATRIX
+    # ---------------------------
+    X = pd.DataFrame(
         df["url"].astype(str).apply(extract_url_metrics).tolist()
     )
-    labels = df["label"]
+    y = df["label"]
 
     # ---------------------------
-    # MODEL TRAINING
+    # TRAIN MODEL
     # ---------------------------
     X_train, X_test, y_train, y_test = train_test_split(
-        feature_df, labels, test_size=0.25, random_state=21
+        X, y, test_size=0.25, random_state=42
     )
 
     model = RandomForestClassifier(
         n_estimators=150,
-        max_depth=10,
-        random_state=21
+        max_depth=12,
+        random_state=42
     )
     model.fit(X_train, y_train)
 
     # ---------------------------
     # USER INPUT
     # ---------------------------
-    input_url = st.text_input("🔗 Enter a URL")
+    user_url = st.text_input("🔗 Enter a URL to analyze")
 
-    if st.button("Scan URL"):
-        if not input_url.strip():
-            st.warning("URL cannot be empty.")
+    if st.button("Analyze URL"):
+        if not user_url.strip():
+            st.warning("Please enter a valid URL.")
         else:
-            input_features = pd.DataFrame(
-                [extract_url_metrics(input_url)]
+            features = pd.DataFrame(
+                [extract_url_metrics(user_url)]
             )
-            risk_score = model.predict_proba(input_features)[0][1]
 
-            if risk_score >= 0.75:
-                st.error(f"🚩 Likely Phishing ({risk_score:.2f})")
-            elif risk_score >= 0.45:
-                st.warning(f"⚠️ Suspicious ({risk_score:.2f})")
+            phishing_prob = model.predict_proba(features)[0][1]
+
+            if phishing_prob >= 0.75:
+                st.error(f"🚩 High Risk Phishing URL ({phishing_prob:.2f})")
+            elif phishing_prob >= 0.45:
+                st.warning(f"⚠️ Suspicious URL ({phishing_prob:.2f})")
             else:
-                st.success(f"✅ Likely Safe ({risk_score:.2f})")
+                st.success(f"✅ Likely Safe URL ({phishing_prob:.2f})")
 
             st.subheader("🔍 Extracted Features")
-            st.table(input_features)
+            st.json(features.to_dict(orient="records")[0])
 
 # ==================================================
 # YARA RULE MATCHER
@@ -109,78 +121,71 @@ if module == "Phishing Link Analyzer":
 if module == "YARA Rule Matcher":
 
     st.header("🧬 YARA Rule Matcher")
-    st.caption("Finds relevant YARA rules based on string similarity.")
+    st.write("Matches YARA rules using character-level TF-IDF similarity.")
 
     # ---------------------------
-    # LOAD RULES
+    # LOAD YARA DATA
     # ---------------------------
     @st.cache_data
-    def read_yara_rules():
-        rules_df = pd.read_csv("yara_rules_clean.csv")
-        return rules_df.dropna(subset=["rule_text"])
+    def load_yara_rules():
+        df = pd.read_csv("yara_rules_clean.csv")
+        return df.dropna(subset=["rule_text"])
 
-    yara_rules = read_yara_rules()
-
-    # ---------------------------
-    # STRING CLEANING
-    # ---------------------------
-    def extract_rule_strings(text):
-        found = re.findall(r'\$[\w]+\s*=\s*(.+)', text)
-        return " ".join(found).lower()
-
-    yara_rules["extracted_strings"] = yara_rules["rule_text"].apply(
-        extract_rule_strings
-    )
-    yara_rules = yara_rules[
-        yara_rules["extracted_strings"].str.len() > 15
-    ]
+    yara_df = load_yara_rules()
 
     # ---------------------------
-    # VECTORIZE
+    # STRING EXTRACTION
     # ---------------------------
-    tfidf = TfidfVectorizer(
+    def extract_strings(rule_text: str) -> str:
+        matches = re.findall(r'\$[\w]+\s*=\s*(.+)', rule_text)
+        return " ".join(matches).lower()
+
+    yara_df["strings"] = yara_df["rule_text"].apply(extract_strings)
+    yara_df = yara_df[yara_df["strings"].str.len() > 15]
+
+    # ---------------------------
+    # TF-IDF VECTORIZATION
+    # ---------------------------
+    vectorizer = TfidfVectorizer(
         analyzer="char_wb",
         ngram_range=(4, 7),
         max_features=30000
     )
-    rule_vectors = tfidf.fit_transform(
-        yara_rules["extracted_strings"]
-    )
+
+    tfidf_matrix = vectorizer.fit_transform(yara_df["strings"])
 
     # ---------------------------
     # USER INPUT
     # ---------------------------
-    malware_input = st.text_area(
-        "Paste suspicious strings or commands",
+    indicators = st.text_area(
+        "Paste malware strings or commands",
         height=160
     )
 
-    num_results = st.slider(
-        "Top matches",
-        min_value=1,
-        max_value=10,
-        value=5
-    )
+    top_k = st.slider("Number of matching rules", 1, 10, 5)
 
     if st.button("Match Rules"):
-        if not malware_input.strip():
-            st.warning("Please provide input strings.")
+        if not indicators.strip():
+            st.warning("Please paste some indicators.")
         else:
-            query_vec = tfidf.transform([malware_input.lower()])
-            similarity_scores = cosine_similarity(
-                query_vec, rule_vectors
+            query_vec = vectorizer.transform(
+                [indicators.lower()]
+            )
+
+            scores = cosine_similarity(
+                query_vec, tfidf_matrix
             ).flatten()
 
-            yara_rules["similarity"] = similarity_scores
-            top_matches = yara_rules.sort_values(
-                "similarity", ascending=False
-            ).head(num_results)
+            yara_df["score"] = scores
+            results = yara_df.sort_values(
+                "score", ascending=False
+            ).head(top_k)
 
-            st.subheader("📌 Matching YARA Rules")
+            st.subheader("📌 Recommended YARA Rules")
 
-            for _, rule in top_matches.iterrows():
+            for _, row in results.iterrows():
                 with st.expander(
-                    f"{rule.get('rule_name', 'Unnamed')} "
-                    f"(Score: {rule['similarity']:.2f})"
+                    f"{row.get('rule_name', 'Unnamed Rule')} "
+                    f"(Score: {row['score']:.2f})"
                 ):
-                    st.code(rule["rule_text"], language="yara")
+                    st.code(row["rule_text"], language="yara")

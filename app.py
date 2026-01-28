@@ -18,6 +18,7 @@ st.set_page_config(
 )
 
 st.title("🛡️ Security Analysis Toolkit")
+
 tool = st.sidebar.radio(
     "Select Tool",
     ["🚨 Phishing URL Detector", "🛡️ YARA Rule Recommendation Tool"]
@@ -34,7 +35,7 @@ if tool == "🚨 Phishing URL Detector":
     # ---------------------------
     # FEATURE ENGINEERING
     # ---------------------------
-    def url_features(u):
+    def url_features(u: str) -> dict:
         p = urlparse(u)
         return {
             "url_len": len(u),
@@ -53,9 +54,26 @@ if tool == "🚨 Phishing URL Detector":
     # LOAD DATASET
     # ---------------------------
     data = pd.read_csv("processed_urls.csv")
+
+    # normalize column names
     data.columns = data.columns.str.lower().str.strip()
 
-    data["label"] = data["label"].astype(str).str.lower().str.strip()
+    if "url" not in data.columns:
+        st.error(f"❌ URL column not found. Found: {list(data.columns)}")
+        st.stop()
+
+    if "label" not in data.columns:
+        st.error(f"❌ Label column not found. Found: {list(data.columns)}")
+        st.stop()
+
+    # normalize labels
+    data["label"] = (
+        data["label"]
+        .astype(str)
+        .str.lower()
+        .str.strip()
+    )
+
     data["label"] = data["label"].map({
         "phishing": 1,
         "malicious": 1,
@@ -69,18 +87,27 @@ if tool == "🚨 Phishing URL Detector":
     data = data.dropna(subset=["label"])
     data["label"] = data["label"].astype(int)
 
-    X = pd.DataFrame([url_features(u) for u in data["url"].astype(str)])
+    # ---------------------------
+    # FEATURE MATRIX
+    # ---------------------------
+    X = pd.DataFrame(
+        [url_features(u) for u in data["url"].astype(str)]
+    )
     y = data["label"]
 
     # ---------------------------
-    # TRAIN MODEL
+    # TRAIN MODEL (CACHED)
     # ---------------------------
-    Xtr, Xte, ytr, yte = train_test_split(
-        X, y, test_size=0.2, random_state=7
-    )
+    @st.cache_resource
+    def train_model(X, y):
+        Xtr, Xte, ytr, yte = train_test_split(
+            X, y, test_size=0.2, random_state=7
+        )
+        clf = GradientBoostingClassifier()
+        clf.fit(Xtr, ytr)
+        return clf
 
-    clf = GradientBoostingClassifier()
-    clf.fit(Xtr, ytr)
+    clf = train_model(X, y)
 
     # ---------------------------
     # USER INPUT
@@ -104,7 +131,6 @@ if tool == "🚨 Phishing URL Detector":
             st.subheader("🔍 Feature Breakdown")
             st.json(feats.to_dict(orient="records")[0])
 
-
 # ==================================================
 # 🛡️ YARA RULE RECOMMENDER
 # ==================================================
@@ -127,7 +153,7 @@ if tool == "🛡️ YARA Rule Recommendation Tool":
     # ---------------------------
     # STRING EXTRACTION
     # ---------------------------
-    def pull_strings(rule):
+    def pull_strings(rule: str) -> str:
         matches = re.findall(r'\$[a-zA-Z0-9_]+\s*=\s*(.+)', rule)
         return " ".join(matches).lower()
 
@@ -142,6 +168,7 @@ if tool == "🛡️ YARA Rule Recommendation Tool":
         ngram_range=(3, 6),
         max_features=40000
     )
+
     tfidf_matrix = vectorizer.fit_transform(yara_df["strings"])
 
     # ---------------------------
@@ -174,6 +201,3 @@ if tool == "🛡️ YARA Rule Recommendation Tool":
                     f"(Score: {row['score']:.2f})"
                 ):
                     st.code(row["rule_text"], language="yara")
-
-
-
